@@ -709,9 +709,8 @@ module GD2
       obj
     end
 
-    # F the memory associated with an image.
+    # Free the memory associated with an image.
     def destroy
-      @image_ptr = FFI::Pointer::NULL
       ::GD2::GD2FFI.send(:gdImageDestroy, image_ptr)
     end
   end

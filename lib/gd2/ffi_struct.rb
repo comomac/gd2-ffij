@@ -53,6 +53,9 @@ module GD2::FFIStruct
     )
 
     def self.release(ptr)
+      # if pointer address is 0, then image needs to be destroyed
+      return unless ptr.get_pointer(0).equal?(0x0)
+
       ::GD2::GD2FFI.gdImageDestroy(ptr) unless ptr.null?
     end
   end
