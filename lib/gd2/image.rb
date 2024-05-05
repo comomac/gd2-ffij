@@ -708,6 +708,11 @@ module GD2
 
       obj
     end
+
+    # F the memory associated with an image.
+    def destroy
+      ::GD2::GD2FFI.send(:gdImageDestroy, image_ptr)
+    end
   end
 
   #
