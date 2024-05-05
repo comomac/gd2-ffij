@@ -1,4 +1,5 @@
-# encoding: ASCII-8BIT
+# frozen_string_literal: true; encoding: ASCII-8BIT
+
 #
 # See COPYRIGHT for license details.
 
@@ -7,39 +8,89 @@ require 'rbconfig'
 require 'gd2/version'
 
 module GD2
+  class LibraryError < StandardError; end
+
   module GD2FFI
+
+    ##
+    # Search for the path to LibGD and return it.
+    #
+    # If global variable $GD2_LIBRARY_FULL_PATH is set and not nil, it
+    # will be used as the path to the shared library.
+    #
+    # Otherwise, if environment variable GD2_LIBRARY_FULL_PATH is set
+    # and not empty, it will be used as the path to the shared library.
+    #
+    # If neither of these are set to a valid path, search for the lib
+    # based on the current platform.  On *nix platforms (including
+    # macOS), a set of likely directories will be searched unless the
+    # environment variable GD2_LIBRARY_PATH is set; in that case, its
+    # value will be used as the *DIRECTORY* to search for the lib.
+    #
+    # The path to the found library is cached internally and returned by
+    # subsequent calls, so filesystem changes will have no effect on
+    # the result.
+    #
+    # If no library path is found, raises a LibraryError exception.
     def self.gd_library_name
       return @gd_library_name if defined?(@gd_library_name)
 
-      @gd_library_name = if RbConfig::CONFIG['host_os'] == 'cygwin'
-        'cyggd-2.dll'
-      elsif RbConfig::CONFIG['host_os'] =~ /mingw/
-        ffi_convention(:stdcall)
-        'bgd.dll'
-      else
-        paths = if ENV['GD2_LIBRARY_PATH']
-          [ ENV['GD2_LIBRARY_PATH'] ]
-        else
-          [ '/usr/local/{lib64,lib}', '/opt/local/{lib64,lib}', '/usr/{lib64,lib}', '/usr/lib/{x86_64,i386}-linux-gnu' ]
-        end
+      # Check for the global
+      @gd_library_name = $GD2_LIBRARY_FULL_PATH
+      return @gd_library_name if @gd_library_name
 
-        lib = if [
-          RbConfig::CONFIG['arch'],
-          RbConfig::CONFIG['host_os']
-        ].detect { |c| c =~ /darwin/ }
-          'libgd.dylib'
-        else
-          'libgd.so'
-        end
+      # Check for the environment variable
+      @gd_library_name = ENV['GD2_LIBRARY_FULL_PATH']
+      return @gd_library_name if @gd_library_name && @gd_library_name != ''
 
-        Dir.glob(paths.collect { |path|
-          "#{path}/#{lib}{.*,}"
-        }).first
+      # Otherwise, we look for the lib:
+
+      # Is it cygwin?
+      case RbConfig::CONFIG['host_os']
+        when 'cygwin'
+          @gd_library_name = 'cyggd-2.dll'
+
+        # Or Windows with MinGW?
+        when /mingw/
+          ffi_convention(:stdcall)
+          @gd_library_name = 'bgd.dll'
+
+        # Otherwise, we assume something *nix-like
+        else
+          looks_like_mac_os = [
+            RbConfig::CONFIG['arch'],
+            RbConfig::CONFIG['host_os']
+          ].detect { |c| c =~ /darwin/ }
+
+          lib = looks_like_mac_os ? 'libgd.dylib' : 'libgd.so'
+
+          # Let the user set a lib dir if they want to; otherwise, we
+          # check the usual suspects.
+          paths = [
+            '/usr/local/{lib64,lib}',
+            '/opt/local/{lib64,lib}',
+            '/usr/{lib64,lib}',
+            '/usr/lib/{x86_64,i386}-linux-gnu',
+            '/usr/lib/arm-linux*'
+          ]
+
+          envpath = ENV['GD2_LIBRARY_PATH']
+
+          paths = [envpath] if envpath && envpath != ''
+
+          @gd_library_name = Dir.glob(paths.collect { |path| "#{path}/#{lib}{.*,}"}).first
       end
+
+      raise LibraryError, 'Unable to find the LibGD dynamic library' unless @gd_library_name
+
+      @gd_library_name
     end
 
     extend FFI::Library
 
+    # rubocop:disable Layout/HashAlignment
+    # rubocop:disable Style/HashSyntax
+    # rubocop:disable Layout/SpaceInsideArrayLiteralBrackets
     FFI_LAYOUT = {
       :gdImageCreate                      => [ :pointer,  :int, :int ],
       :gdImageCreateTrueColor             => [ :pointer,  :int, :int ],
@@ -59,6 +110,7 @@ module GD2
       :gdImageCreateFromGd2Part           => [ :pointer,  :pointer, :int, :int, :int, :int ],
       :gdImageCreateFromXbm               => [ :pointer,  :pointer ],
       :gdImageCreateFromXpm               => [ :pointer,  :pointer ],
+      :gdImagePaletteCopy                 => [ :void,     :pointer, :pointer ],
       :gdImageCompare                     => [ :int,      :pointer, :pointer ],
       :gdImageJpeg                        => [ :void,     :pointer, :pointer, :int ],
       :gdImageJpegPtr                     => [ :pointer,  :pointer, :pointer, :int ],
@@ -105,8 +157,10 @@ module GD2
       :gdImageColorExactAlpha             => [ :int,      :pointer, :int, :int, :int, :int ],
       :gdImageColorClosestAlpha           => [ :int,      :pointer, :int, :int, :int, :int ],
       :gdImageColorClosestHWB             => [ :int,      :pointer, :int, :int, :int ],
+      :gdImageColorAllocate               => [ :int,      :pointer, :int, :int, :int ],
       :gdImageColorAllocateAlpha          => [ :int,      :pointer, :int, :int, :int, :int ],
       :gdImageColorDeallocate             => [ :void,     :pointer, :int ],
+      :gdImagePaletteToTrueColor          => [ :pointer,  :pointer],
       :gdAlphaBlend                       => [ :int,      :int, :int ],
       :gdImageCopy                        => [ :void,     :pointer, :pointer, :int, :int, :int, :int, :int, :int ],
       :gdImageCopyResized                 => [ :void,     :pointer, :pointer, :int, :int, :int, :int, :int, :int, :int, :int ],
@@ -122,6 +176,12 @@ module GD2
       :gdImageStringUp                    => [ :void,     :pointer, :pointer, :int, :int, :pointer, :int ],
       :gdImageStringFTEx                  => [ :pointer,  :pointer, :pointer, :int, :pointer, :double, :double, :int, :int, :pointer, :pointer ],
       :gdImageStringFTCircle              => [ :pointer,  :pointer, :int, :int, :double, :double, :double, :pointer, :double, :pointer, :pointer, :int ],
+      :gdImageGifAnimBeginPtr             => [ :pointer,  :pointer, :pointer, :int, :int ],
+      :gdImageGifAnimBegin                => [ :void,     :pointer, :pointer, :int, :int ],
+      :gdImageGifAnimAddPtr               => [ :pointer,  :pointer, :pointer, :int, :int, :int, :int, :int, :pointer ],
+      :gdImageGifAnimAdd                  => [ :void,     :pointer, :pointer, :int, :int, :int, :int, :int, :pointer ],
+      :gdImageGifAnimEnd                  => [ :void,     :pointer ],
+      :gdImageGifAnimEndPtr               => [ :pointer,  :pointer ],
       :gdFontGetSmall                     => [ :pointer ],
       :gdFontGetLarge                     => [ :pointer ],
       :gdFontGetMediumBold                => [ :pointer ],
@@ -131,7 +191,10 @@ module GD2
       :gdFontCacheShutdown                => [ :void ],
       :gdFTUseFontConfig                  => [ :int,      :int ],
       :gdFree                             => [ :void,     :pointer ]
-    }
+    }.freeze
+    # rubocop:enable Layout/SpaceInsideArrayLiteralBrackets
+    # rubocop:enable Style/HashSyntax
+    # rubocop:enable Layout/HashAlignment
 
     begin
       ffi_lib(gd_library_name)
@@ -139,7 +202,7 @@ module GD2
       FFI_LAYOUT.each do |fun, ary|
         ret = ary.shift
         begin
-          self.class_eval do
+          class_eval do
             attach_function(fun, ary, ret)
           end
         rescue FFI::NotFoundError
@@ -147,9 +210,12 @@ module GD2
         end
       end
     rescue LoadError, NoMethodError
-      raise LoadError.new("Couldn't load the gd2 library.")
+      raise LoadError, "Couldn't load the gd2 library."
     end
   end
+
+  # rubocop:disable Layout/SpaceAroundOperators
+  # rubocop:disable Layout/ExtraSpacing
 
   # Bit flags for Image#compare
 
@@ -177,19 +243,22 @@ module GD2
   ALPHA_MAX         = 127
   ALPHA_OPAQUE      =   0
   ALPHA_TRANSPARENT = 127
+  # rubocop:enable Layout/ExtraSpacing
+  # rubocop:enable Layout/SpaceAroundOperators
 
-  class LibraryError < StandardError; end
+  GD2_BASE = File.join(File.dirname(__FILE__), 'gd2')
+
+  autoload :Image, File.join(GD2_BASE, 'image')
+  autoload :Color, File.join(GD2_BASE, 'color')
+  autoload :Palette, File.join(GD2_BASE, 'palette')
+  autoload :Canvas, File.join(GD2_BASE, 'canvas')
+  autoload :Font, File.join(GD2_BASE, 'font')
+  autoload :FFIStruct, File.join(GD2_BASE, 'ffi_struct')
+  autoload :AnimatedGif, File.join(GD2_BASE, 'animated_gif')
 end
 
-require 'gd2/image'
-require 'gd2/color'
-require 'gd2/palette'
-require 'gd2/canvas'
-require 'gd2/font'
-require 'gd2/ffi_struct'
-
 class Numeric
-  if not self.instance_methods.include? 'degrees'
+  unless instance_methods.include? 'degrees'
     # Express an angle in degrees, e.g. 90.degrees. Angles are converted to
     # radians.
     def degrees
@@ -198,14 +267,14 @@ class Numeric
     alias degree degrees
   end
 
-  if not self.instance_methods.include? 'to_degrees'
+  unless instance_methods.include? 'to_degrees'
     # Convert an angle (in radians) to degrees.
     def to_degrees
       self * 360 / Math::PI / 2
     end
   end
 
-  if not self.instance_methods.include? 'percent'
+  unless instance_methods.include? 'percent'
     # Express a percentage, e.g. 50.percent. Percentages are floating point
     # values, e.g. 0.5.
     def percent
@@ -213,7 +282,7 @@ class Numeric
     end
   end
 
-  if not self.instance_methods.include? 'to_percent'
+  unless instance_methods.include? 'to_percent'
     # Convert a number to a percentage value, e.g. 0.5 to 50.0.
     def to_percent
       self * 100
